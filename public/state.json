@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-28T08:40:00.000Z",
+  "mode": "paper",
+  "initialCapital": 1000,
+  "cash": 1000,
+  "realizedPnl": 0,
+  "buyRounds": 0,
+  "maxBuyRounds": 10,
+  "scanParams": {
+    "chains": ["solana", "ethereum", "bsc", "base"],
+    "walletType": "1,3",
+    "minAmountUsd": 5000,
+    "minAddressCount": 2,
+    "minLiquidityUsd": 100000,
+    "limit": 20
+  },
+  "riskRules": {
+    "maxPositionPct": 0.25,
+    "stopLossPct": -10,
+    "takeProfitPct": 20,
+    "noLeverage": true,
+    "spotLongOnly": true
+  },
+  "positions": [],
+  "trades": [],
+  "scans": [
+    {
+      "time": "2026-05-28T08:40:00.000Z",
+      "status": "initialized",
+      "actions": [],
+      "note": "Fresh paper trading ledger initialized at 1000 USDT. First real signal scan will run from GitHub Actions."
+    }
+  ]
+}

@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Wallet Paper Trading</title>
+    <style>
+      :root {
+        --bg: #f5f7fa;
+        --panel: #ffffff;
+        --text: #171a20;
+        --muted: #667085;
+        --line: #dde3ea;
+        --accent: #2563eb;
+        --good: #067647;
+        --bad: #b42318;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 28px;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        margin: 0;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        font-size: 16px;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        height: 26px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: #eaf1ff;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .metric,
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      .metric {
+        padding: 14px;
+        min-height: 88px;
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .metric strong {
+        font-size: 22px;
+      }
+
+      .panel {
+        margin-top: 14px;
+        overflow: hidden;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-weight: 650;
+        background: #fafbfc;
+      }
+
+      code {
+        font-size: 12px;
+        word-break: break-all;
+      }
+
+      .good {
+        color: var(--good);
+      }
+
+      .bad {
+        color: var(--bad);
+      }
+
+      @media (max-width: 780px) {
+        main {
+          padding: 14px;
+        }
+
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .panel {
+          overflow-x: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Agent Wallet Paper Trading</h1>
+          <div class="muted" id="updated">Loading...</div>
+        </div>
+        <span class="pill" id="rounds">0 / 10 rounds</span>
+      </header>
+
+      <section class="grid" id="metrics"></section>
+
+      <section class="panel">
+        <h2>Open Positions</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>Chain</th>
+              <th>Quantity</th>
+              <th>Entry</th>
+              <th>Mark</th>
+              <th>Value</th>
+              <th>PnL</th>
+            </tr>
+          </thead>
+          <tbody id="positions"></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Trades</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Time</th>
+              <th>Side</th>
+              <th>Token</th>
+              <th>Price</th>
+              <th>Notional</th>
+              <th>Realized PnL</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody id="trades"></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Latest Scans</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Status</th>
+              <th>Actions</th>
+              <th>Parameters / Notes</th>
+            </tr>
+          </thead>
+          <tbody id="scans"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script>
+      const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+      const qty = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
+
+      function tone(value) {
+        return Number(value) >= 0 ? "good" : "bad";
+      }
+
+      function tr(cells) {
+        return `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+      }
+
+      async function loadState() {
+        const response = await fetch("./state.json", { cache: "no-store" });
+        const state = await response.json();
+        const openValue = state.positions.reduce((sum, item) => sum + Number(item.marketValue || item.cost || 0), 0);
+        const unrealized = state.positions.reduce((sum, item) => sum + Number(item.unrealizedPnl || 0), 0);
+        const equity = Number(state.cash || 0) + openValue;
+
+        document.getElementById("updated").textContent = `Updated ${state.updatedAt}`;
+        document.getElementById("rounds").textContent = `${state.buyRounds} / ${state.maxBuyRounds} rounds`;
+        document.getElementById("metrics").innerHTML = [
+          ["Equity", money.format(equity)],
+          ["Cash", money.format(state.cash || 0)],
+          ["Realized PnL", money.format(state.realizedPnl || 0)],
+          ["Unrealized PnL", `<span class="${tone(unrealized)}">${money.format(unrealized)}</span>`],
+        ]
+          .map(([label, value]) => `<article class="metric"><span>${label}</span><strong>${value}</strong></article>`)
+          .join("");
+
+        document.getElementById("positions").innerHTML = state.positions.length
+          ? state.positions
+              .map((position) =>
+                tr([
+                  `<strong>${position.symbol}</strong><br><code>${position.contract}</code>`,
+                  position.chain,
+                  qty.format(position.quantity || 0),
+                  Number(position.avgEntry || 0).toPrecision(8),
+                  Number(position.lastMark || 0).toPrecision(8),
+                  money.format(position.marketValue || 0),
+                  `<span class="${tone(position.unrealizedPnl)}">${money.format(position.unrealizedPnl || 0)} (${Number(position.unrealizedPnlPct || 0).toFixed(2)}%)</span>`,
+                ]),
+              )
+              .join("")
+          : tr(["No open positions", "", "", "", "", "", ""]);
+
+        document.getElementById("trades").innerHTML = state.trades.length
+          ? [...state.trades]
+              .reverse()
+              .map((trade) =>
+                tr([
+                  trade.id,
+                  trade.time,
+                  trade.side,
+                  `<strong>${trade.symbol}</strong><br><code>${trade.contract}</code>`,
+                  Number(trade.price || 0).toPrecision(8),
+                  money.format(trade.notional || 0),
+                  `<span class="${tone(trade.realizedPnl)}">${money.format(trade.realizedPnl || 0)}</span>`,
+                  `<code>${trade.source || ""}</code>`,
+                ]),
+              )
+              .join("")
+          : tr(["No trades yet", "", "", "", "", "", "", ""]);
+
+        document.getElementById("scans").innerHTML = (state.scans || [])
+          .slice(0, 20)
+          .map((scan) =>
+            tr([
+              scan.time,
+              scan.status,
+              (scan.actions || []).map((action) => `${action.type}${action.symbol ? ` ${action.symbol}` : ""}`).join("<br>"),
+              `<code>${scan.note || JSON.stringify(scan.params || state.scanParams || {})}</code>`,
+            ]),
+          )
+          .join("");
+      }
+
+      loadState().catch((error) => {
+        document.getElementById("updated").textContent = error.message;
+      });
+    </script>
+  </body>
+</html>
