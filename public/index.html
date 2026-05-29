@@ -141,6 +141,12 @@
         min-width: 180px;
       }
 
+      .ledger-note {
+        color: var(--muted);
+        line-height: 1.55;
+        min-width: 220px;
+      }
+
       .good {
         color: var(--good);
       }
@@ -213,6 +219,23 @@
             </tr>
           </thead>
           <tbody id="strategy-decisions"></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>信号账本 / 复盘</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>代币</th>
+              <th>信号参数</th>
+              <th>策略决策</th>
+              <th>后续表现</th>
+              <th>执行结果</th>
+            </tr>
+          </thead>
+          <tbody id="signal-ledger"></tbody>
         </table>
       </section>
 
@@ -310,6 +333,15 @@
         SKIP: "跳过",
       };
 
+      const ledgerActionLabel = {
+        BUY_EXECUTED: "已买入",
+        BUY_NOT_EXECUTED: "买入未执行",
+        WATCH_SELECTED: "选中观察",
+        WATCH_ONLY: "观察",
+        SKIPPED: "跳过",
+        ERROR: "评估失败",
+      };
+
       function formatTime(value) {
         if (!value) return "";
         const date = new Date(value);
@@ -347,6 +379,48 @@
       function formatStrategyReasons(strategy) {
         const reasons = strategyEvaluation(strategy)?.reasons || [];
         return reasons.length ? reasons.slice(0, 4).join("<br>") : "未记录买入理由";
+      }
+
+      function formatPercent(value) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? `${parsed.toFixed(2)}%` : "未记录";
+      }
+
+      function formatMaybeMoney(value) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? money.format(parsed) : "未记录";
+      }
+
+      function formatLedgerSignal(entry) {
+        const signal = entry.signal || {};
+        const token = signal.token || {};
+        return `<div class="ledger-note">买入金额：${formatMaybeMoney(signal.amountUsd)}<br>触发地址：${signal.triggerWalletCount ?? "未记录"} 个<br>卖出比例：${formatPercent(signal.soldRatioPercent)}<br>市值：${formatMaybeMoney(token.marketCapUsd)}<br>持有人：${token.holders ?? "未记录"}<br>Top10：${formatPercent(token.top10HolderPercent)}</div>`;
+      }
+
+      function formatLedgerStrategy(entry) {
+        const strategy = entry.strategy || {};
+        const risk = strategy.risk || {};
+        const reasons = (strategy.reasons || []).slice(0, 3).join("<br>");
+        return `<div class="ledger-note">决策：${decisionLabel[strategy.decision] || strategy.decision || decisionLabel[entry.decision] || entry.decision || "未知"}<br>评分：${Number(entry.score || strategy.score || 0).toFixed(2)}<br>风险：${risk.level || "未记录"} ${risk.score != null ? Number(risk.score).toFixed(2) : ""}<br>来源：${entry.source?.dataSource === "okx-native-api" ? "OKX 原生 API" : entry.source?.dataSource || "未记录"}${reasons ? `<br>${reasons}` : ""}</div>`;
+      }
+
+      function formatLedgerOutcome(entry) {
+        const outcome = entry.outcome || {};
+        const returnPct = Number(outcome.returnPct || 0);
+        const age = Number(outcome.ageMinutes || 0);
+        return `<div class="ledger-note">基准价：${Number(outcome.baselinePrice || 0).toPrecision(8)}<br>最新价：${Number(outcome.latestPrice || 0).toPrecision(8)}<br>涨跌：<span class="${tone(returnPct)}">${formatPercent(returnPct)}</span><br>观察时长：${age ? `${age.toFixed(0)} 分钟` : "本轮"}</div>`;
+      }
+
+      function formatLedgerAction(entry) {
+        const execution = entry.execution;
+        const lines = [
+          ledgerActionLabel[entry.action] || entry.action || "未记录",
+          entry.selected ? "本轮选中" : "",
+          execution ? `轮次：${execution.round}` : "",
+          execution ? `金额：${formatMaybeMoney(execution.notional)}` : "",
+          entry.error ? `错误：${entry.error}` : "",
+        ].filter(Boolean);
+        return `<div class="ledger-note">${lines.join("<br>")}</div>`;
       }
 
       function formatWalletTypes(value) {
@@ -461,6 +535,22 @@
               })
               .join("")
           : tr(["暂无 H-Signal 决策", "", "", "", ""]);
+
+        document.getElementById("signal-ledger").innerHTML = (state.signalLedger || []).length
+          ? state.signalLedger
+              .slice(0, 50)
+              .map((entry) =>
+                tr([
+                  formatTime(entry.scanTime),
+                  `<strong>${entry.symbol}</strong><br>${chainLabel[entry.chain] || entry.chain || ""}<br><code>${entry.contract}</code>`,
+                  formatLedgerSignal(entry),
+                  formatLedgerStrategy(entry),
+                  formatLedgerOutcome(entry),
+                  formatLedgerAction(entry),
+                ]),
+              )
+              .join("")
+          : tr(["暂无信号账本，下一轮扫描后生成", "", "", "", "", ""]);
 
         document.getElementById("trades").innerHTML = state.trades.length
           ? [...state.trades]

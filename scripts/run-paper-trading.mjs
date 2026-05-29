@@ -99,6 +99,7 @@ function loadState() {
       positions: [],
       trades: [],
       scans: [],
+      signalLedger: [],
     };
   }
 
@@ -158,6 +159,192 @@ function sell(state, position, reason) {
     reason,
     source: position.lastMarkSource,
   });
+}
+
+function tokenKey(chainIndex, contract) {
+  return `${chainIndex || ""}:${String(contract || "").toLowerCase()}`;
+}
+
+function signalToken(signal) {
+  return signal?.token || {};
+}
+
+function signalContract(signal) {
+  return signalToken(signal).tokenAddress || "";
+}
+
+function signalChain(signal) {
+  return chainByIndex.get(signal.chainIndex) || signal.chain || "unknown";
+}
+
+function sameSignal(left, right) {
+  return tokenKey(left?.chainIndex, signalContract(left)) === tokenKey(right?.chainIndex, signalContract(right));
+}
+
+function scanForSignal(scans, signal) {
+  const key = tokenKey(signal.chainIndex, signalContract(signal));
+  return scans.find((scan) => (scan.signals || []).some((item) => tokenKey(item.chainIndex, signalContract(item)) === key)) || null;
+}
+
+function compactStrategy(strategy) {
+  const payload = strategy?.data || {};
+  const evaluation = payload.evaluation || {};
+  const tokenRisk = payload.tokenRisk || {};
+
+  return {
+    provider: strategy?.provider || null,
+    mode: strategy?.mode || payload.mode || null,
+    dataSource: payload.dataSource || tokenRisk.dataSource || null,
+    decision: evaluation.decision || null,
+    score: number(evaluation.score, null),
+    confidence: number(evaluation.confidence, null),
+    suggestedPositionPct: number(evaluation.suggestedPositionPct, null),
+    reasons: Array.isArray(evaluation.reasons) ? evaluation.reasons.slice(0, 6) : [],
+    factors: evaluation.factors || {},
+    risk: tokenRisk
+      ? {
+          level: tokenRisk.level || null,
+          score: number(tokenRisk.score, null),
+          notes: Array.isArray(tokenRisk.notes) ? tokenRisk.notes.slice(0, 6) : [],
+          metrics: tokenRisk.metrics || {},
+          factors: tokenRisk.factors || {},
+        }
+      : null,
+  };
+}
+
+function compactSignal(signal) {
+  const token = signalToken(signal);
+  return {
+    amountUsd: number(signal.amountUsd, null),
+    triggerWalletCount: number(signal.triggerWalletCount, null),
+    soldRatioPercent: number(signal.soldRatioPercent, null),
+    walletType: signal.walletType || null,
+    signalPrice: number(signal.price, null),
+    signalTimestamp: signal.timestamp || null,
+    cursor: signal.cursor || null,
+    token: {
+      marketCapUsd: number(token.marketCapUsd, null),
+      holders: number(token.holders, null),
+      top10HolderPercent: number(token.top10HolderPercent, null),
+      logo: token.logo || null,
+    },
+  };
+}
+
+function baselinePrice(signal, strategy, bought) {
+  return (
+    number(bought?.avgEntry, null) ??
+    number(strategy?.data?.tokenRisk?.rawSnapshot?.priceInfo?.price, null) ??
+    number(signal?.price, null)
+  );
+}
+
+function signalAction(item, selected, bought) {
+  if (item.error) return "ERROR";
+  if (bought && sameSignal(item.signal, bought.entrySignal)) return "BUY_EXECUTED";
+  if (selected?.signal && sameSignal(item.signal, selected.signal)) return item.decision === "BUY" ? "BUY_NOT_EXECUTED" : "WATCH_SELECTED";
+  if (item.decision === "WATCH") return "WATCH_ONLY";
+  return "SKIPPED";
+}
+
+function appendSignalLedger(state, scan, scans, strategyResult, bought) {
+  const now = scan.time;
+  const selected = strategyResult.selected;
+  const entries = strategyResult.evaluations.map((item, index) => {
+    const signal = item.signal;
+    const token = signalToken(signal);
+    const sourceScan = scanForSignal(scans, signal);
+    const action = signalAction(item, selected, bought);
+    const basePrice = baselinePrice(signal, item.strategy, action === "BUY_EXECUTED" ? bought : null);
+    const contract = signalContract(signal);
+
+    return {
+      id: `${now}:${signal.chainIndex}:${contract}:${index}`,
+      scanTime: now,
+      roundAtScan: state.buyRounds,
+      rank: index + 1,
+      symbol: token.symbol || "UNKNOWN",
+      name: token.name || "",
+      chain: signalChain(signal),
+      chainIndex: signal.chainIndex,
+      contract,
+      source: {
+        signalProvider: scan.signalProvider || null,
+        strategyProvider: scan.strategyProvider || null,
+        dataSource: sourceScan?.dataSource || item.strategy?.data?.dataSource || null,
+        provider: sourceScan?.provider || item.strategy?.meta?.provider || null,
+      },
+      scanParams: scan.params,
+      signal: compactSignal(signal),
+      strategy: compactStrategy(item.strategy),
+      decision: item.decision,
+      score: number(item.score, null),
+      legacyScore: number(item.legacyScore, null),
+      action,
+      selected: selected?.signal ? sameSignal(signal, selected.signal) : false,
+      execution: action === "BUY_EXECUTED" && bought
+        ? {
+            round: bought.round,
+            price: bought.avgEntry,
+            notional: bought.cost,
+            quantity: bought.quantity,
+          }
+        : null,
+      error: item.error || null,
+      outcome: {
+        baselinePrice: basePrice,
+        latestPrice: basePrice,
+        latestPriceAt: now,
+        returnPct: 0,
+        markSource: action === "BUY_EXECUTED" ? bought?.lastMarkSource || null : "entry-snapshot",
+      },
+    };
+  });
+
+  state.signalLedger = [...entries, ...(state.signalLedger || [])].slice(0, 300);
+  scan.ledgerEntries = entries.length;
+}
+
+function refreshSignalLedgerOutcomes(state, scan, maxUniqueMarks = 16) {
+  const ledger = state.signalLedger || [];
+  const candidates = ledger.filter((entry) => entry.contract && entry.chain && entry.outcome?.baselinePrice).slice(0, 80);
+  const priceCache = new Map();
+
+  for (const entry of candidates) {
+    const key = tokenKey(entry.chainIndex, entry.contract);
+    if (priceCache.has(key)) continue;
+    if (priceCache.size >= maxUniqueMarks) break;
+
+    const args = ["token", "price-info", "--address", entry.contract, "--chain", entry.chain];
+    try {
+      const response = onchainos(args);
+      const data = Array.isArray(response.data) ? response.data[0] : null;
+      if (!response.ok || !data) throw new Error(`No price-info for ${entry.symbol}`);
+      priceCache.set(key, {
+        price: number(data.price, null),
+        source: command(args),
+        snapshot: data,
+      });
+    } catch (error) {
+      scan.errors.push({ stage: "ledger-mark", symbol: entry.symbol, message: error.message });
+    }
+  }
+
+  const now = timestamp();
+  for (const entry of candidates) {
+    const mark = priceCache.get(tokenKey(entry.chainIndex, entry.contract));
+    if (!mark?.price) continue;
+    const baseline = number(entry.outcome?.baselinePrice, null);
+    entry.outcome.latestPrice = mark.price;
+    entry.outcome.latestPriceAt = now;
+    entry.outcome.returnPct = baseline ? ((mark.price - baseline) / baseline) * 100 : 0;
+    entry.outcome.markSource = mark.source;
+    entry.outcome.markSnapshot = mark.snapshot;
+    entry.outcome.ageMinutes = Math.max(0, (new Date(now).getTime() - new Date(entry.scanTime).getTime()) / 60000);
+  }
+
+  scan.ledgerMarks = priceCache.size;
 }
 
 function scanSignalsViaOnchainos(state, onlyChain = null) {
@@ -490,10 +677,12 @@ async function run() {
       }));
       const bought = buy(state, strategyResult.selected);
       scan.actions.push(bought ? { type: "BUY", symbol: bought.symbol, round: bought.round } : { type: "NO_BUY", reason: "no-candidate" });
+      appendSignalLedger(state, scan, signalScans, strategyResult, bought);
     } else {
       scan.actions.push({ type: "NO_BUY", reason: "max-buy-rounds-reached" });
     }
 
+    refreshSignalLedgerOutcomes(state, scan);
     scan.status = "ok";
   } catch (error) {
     scan.status = "error";
