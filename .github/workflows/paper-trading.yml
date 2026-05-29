@@ -1,0 +1,55 @@
+name: Agent Wallet Paper Trading
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: agent-wallet-paper-trading
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install onchainos
+        run: |
+          set -euo pipefail
+          latest_tag="$(curl -sSL https://api.github.com/repos/okx/onchainos-skills/releases/latest | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>console.log(JSON.parse(s).tag_name))')"
+          curl -sSL "https://raw.githubusercontent.com/okx/onchainos-skills/${latest_tag}/install.sh" -o /tmp/onchainos-install.sh
+          sh /tmp/onchainos-install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run paper trading scan
+        run: node scripts/run-paper-trading.mjs
+
+      - name: Commit updated state
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update paper trading state"
+          file_pattern: public/state.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: update
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
