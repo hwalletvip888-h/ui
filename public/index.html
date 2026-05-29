@@ -147,6 +147,11 @@
         min-width: 220px;
       }
 
+      .review-note {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
       .good {
         color: var(--good);
       }
@@ -186,6 +191,19 @@
       </header>
 
       <section class="grid" id="metrics"></section>
+
+      <section class="panel">
+        <h2>策略复盘指标</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>指标</th>
+              <th>内容</th>
+            </tr>
+          </thead>
+          <tbody id="strategy-review"></tbody>
+        </table>
+      </section>
 
       <section class="panel">
         <h2>当前持仓</h2>
@@ -423,6 +441,48 @@
         return `<div class="ledger-note">${lines.join("<br>")}</div>`;
       }
 
+      function formatReviewRate(value) {
+        return value == null ? "样本不足" : formatPercent(value);
+      }
+
+      function formatReviewReturn(value) {
+        return value == null ? "样本不足" : `<span class="${tone(value)}">${formatPercent(value)}</span>`;
+      }
+
+      function formatReviewSummary(summary) {
+        if (!summary || !summary.count) return "样本不足";
+        return `样本：${summary.count} 条<br>平均涨跌：${formatReviewReturn(summary.avgReturnPct)}<br>胜率：${formatReviewRate(summary.winRatePct)}<br>强上涨占比：${formatReviewRate(summary.strongUpRatePct)}<br>强回撤占比：${formatReviewRate(summary.strongDownRatePct)}<br>最好 / 最差：${formatReviewReturn(summary.bestReturnPct)} / ${formatReviewReturn(summary.worstReturnPct)}`;
+      }
+
+      function formatReviewGroups(groups) {
+        const entries = Object.entries(groups || {});
+        if (!entries.length) return "样本不足";
+        return entries
+          .map(([name, summary]) => `${decisionLabel[name] || ledgerActionLabel[name] || name}：${summary.count} 条，均值 ${formatReviewReturn(summary.avgReturnPct)}，胜率 ${formatReviewRate(summary.winRatePct)}`)
+          .join("<br>");
+      }
+
+      function formatReviewMovers(items) {
+        if (!items?.length) return "暂无";
+        return items
+          .slice(0, 6)
+          .map((item) => `${item.symbol} ${decisionLabel[item.decision] || item.decision || ""} / ${ledgerActionLabel[item.action] || item.action || ""}：${formatReviewReturn(item.returnPct)}`)
+          .join("<br>");
+      }
+
+      function renderStrategyReview(review) {
+        if (!review) return tr(["暂无复盘", "下一轮扫描后生成策略复盘指标"]);
+        return [
+          tr(["样本状态", `<div class="review-note">账本候选：${review.totalCandidates || 0} 条<br>已标记价格：${review.observedCount || 0} 条<br>成熟样本：${review.matureCount || 0} 条<br>成熟阈值：${review.minReviewMinutes || 30} 分钟</div>`]),
+          tr(["总体表现", `<div class="review-note">${formatReviewSummary(review.headline)}</div>`]),
+          tr(["按决策分组", `<div class="review-note">${formatReviewGroups(review.byDecision)}</div>`]),
+          tr(["按执行结果分组", `<div class="review-note">${formatReviewGroups(review.byAction)}</div>`]),
+          tr(["涨幅榜", `<div class="review-note">${formatReviewMovers(review.topMovers)}</div>`]),
+          tr(["错过涨幅", `<div class="review-note">${formatReviewMovers(review.missedUpside)}</div>`]),
+          tr(["策略建议", `<div class="review-note">${(review.recommendations || []).join("<br>")}</div>`]),
+        ].join("");
+      }
+
       function formatWalletTypes(value) {
         return String(value || "")
           .split(",")
@@ -501,6 +561,8 @@
         ]
           .map(([label, value]) => `<article class="metric"><span>${label}</span><strong>${value}</strong></article>`)
           .join("");
+
+        document.getElementById("strategy-review").innerHTML = renderStrategyReview(state.strategyReview);
 
         document.getElementById("positions").innerHTML = state.positions.length
           ? state.positions

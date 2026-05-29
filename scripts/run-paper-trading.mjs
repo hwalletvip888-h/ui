@@ -100,6 +100,7 @@ function loadState() {
       trades: [],
       scans: [],
       signalLedger: [],
+      strategyReview: null,
     };
   }
 
@@ -345,6 +346,118 @@ function refreshSignalLedgerOutcomes(state, scan, maxUniqueMarks = 16) {
   }
 
   scan.ledgerMarks = priceCache.size;
+}
+
+function average(values) {
+  const clean = values.filter((value) => Number.isFinite(value));
+  return clean.length ? clean.reduce((sum, value) => sum + value, 0) / clean.length : null;
+}
+
+function groupReview(entries, key) {
+  return entries.reduce((groups, entry) => {
+    const name = entry[key] || "UNKNOWN";
+    if (!groups[name]) groups[name] = [];
+    groups[name].push(entry);
+    return groups;
+  }, {});
+}
+
+function summarizeEntries(entries) {
+  const returns = entries.map((entry) => number(entry.outcome?.returnPct, null)).filter((value) => Number.isFinite(value));
+  const positive = returns.filter((value) => value > 0).length;
+  const strongUp = returns.filter((value) => value >= 5).length;
+  const strongDown = returns.filter((value) => value <= -5).length;
+
+  return {
+    count: entries.length,
+    avgReturnPct: average(returns),
+    bestReturnPct: returns.length ? Math.max(...returns) : null,
+    worstReturnPct: returns.length ? Math.min(...returns) : null,
+    winRatePct: returns.length ? (positive / returns.length) * 100 : null,
+    strongUpRatePct: returns.length ? (strongUp / returns.length) * 100 : null,
+    strongDownRatePct: returns.length ? (strongDown / returns.length) * 100 : null,
+  };
+}
+
+function summarizeGroups(entries, key) {
+  return Object.fromEntries(
+    Object.entries(groupReview(entries, key)).map(([name, group]) => [name, summarizeEntries(group)]),
+  );
+}
+
+function reviewRecommendation(review) {
+  const notes = [];
+  if (review.matureCount < 20) {
+    notes.push(`成熟样本只有 ${review.matureCount} 条，先继续积累，不急着改 BUY 阈值。`);
+  }
+
+  const watch = review.byDecision.WATCH;
+  if (watch?.count >= 5 && number(watch.avgReturnPct, 0) > 3) {
+    notes.push("WATCH 组平均涨幅超过 3%，后面可以考虑放宽部分 WATCH 到小仓位试单。");
+  } else if (watch?.count >= 5 && number(watch.strongDownRatePct, 0) > 35) {
+    notes.push("WATCH 组回撤比例偏高，当前观察判断偏宽，需要提高风险过滤。");
+  }
+
+  if (review.missedUpside.length >= 3) {
+    notes.push("出现多条未买入但涨幅超过 5% 的信号，需要重点复盘错过原因。");
+  }
+
+  const executed = review.byAction.BUY_EXECUTED;
+  if (executed?.count >= 3 && number(executed.avgReturnPct, 0) < 0) {
+    notes.push("已执行买入组平均收益为负，先检查入场价格和止损宽度。");
+  }
+
+  return notes.length ? notes : ["当前没有明显阈值调整信号，继续按原策略采样。"];
+}
+
+function buildStrategyReview(state) {
+  const minReviewMinutes = 30;
+  const ledger = state.signalLedger || [];
+  const observed = ledger.filter((entry) => Number.isFinite(number(entry.outcome?.returnPct, null)));
+  const mature = observed.filter((entry) => number(entry.outcome?.ageMinutes, 0) >= minReviewMinutes);
+  const candidates = mature.length ? mature : observed;
+  const topMovers = [...candidates]
+    .sort((left, right) => number(right.outcome?.returnPct, -Infinity) - number(left.outcome?.returnPct, -Infinity))
+    .slice(0, 10)
+    .map((entry) => ({
+      symbol: entry.symbol,
+      chain: entry.chain,
+      contract: entry.contract,
+      decision: entry.decision,
+      action: entry.action,
+      score: entry.score,
+      returnPct: entry.outcome?.returnPct,
+      ageMinutes: entry.outcome?.ageMinutes || 0,
+    }));
+
+  const missedUpside = mature
+    .filter((entry) => !entry.execution && number(entry.outcome?.returnPct, 0) >= 5)
+    .sort((left, right) => number(right.outcome?.returnPct, 0) - number(left.outcome?.returnPct, 0))
+    .slice(0, 10)
+    .map((entry) => ({
+      symbol: entry.symbol,
+      chain: entry.chain,
+      decision: entry.decision,
+      action: entry.action,
+      score: entry.score,
+      returnPct: entry.outcome?.returnPct,
+      reason: entry.strategy?.reasons?.at(-1) || "",
+    }));
+
+  const review = {
+    updatedAt: timestamp(),
+    minReviewMinutes,
+    totalCandidates: ledger.length,
+    observedCount: observed.length,
+    matureCount: mature.length,
+    headline: summarizeEntries(mature),
+    byDecision: summarizeGroups(mature, "decision"),
+    byAction: summarizeGroups(mature, "action"),
+    topMovers,
+    missedUpside,
+  };
+  review.recommendations = reviewRecommendation(review);
+  state.strategyReview = review;
 }
 
 function scanSignalsViaOnchainos(state, onlyChain = null) {
@@ -683,6 +796,7 @@ async function run() {
     }
 
     refreshSignalLedgerOutcomes(state, scan);
+    buildStrategyReview(state);
     scan.status = "ok";
   } catch (error) {
     scan.status = "error";
