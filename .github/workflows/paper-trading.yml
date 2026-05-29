@@ -29,7 +29,24 @@ jobs:
           sh /tmp/onchainos-install.sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Login onchainos
+        env:
+          OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
+          OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
+          OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -n "${OKX_API_KEY:-}" ] && [ -n "${OKX_SECRET_KEY:-}" ] && [ -n "${OKX_PASSPHRASE:-}" ]; then
+            onchainos wallet login
+          else
+            echo "OKX API secrets are not configured; the scan will record an auth error until they are added."
+          fi
+
       - name: Run paper trading scan
+        env:
+          OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
+          OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
+          OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
         run: node scripts/run-paper-trading.mjs
 
       - name: Commit updated state

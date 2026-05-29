@@ -25,6 +25,14 @@ function command(args) {
   return `onchainos ${args.join(" ")}`;
 }
 
+function explainOnchainosError(detail) {
+  if (detail.includes("Invalid Authority") || detail.includes("not logged in")) {
+    return `${detail}\nGitHub Actions needs OKX_API_KEY, OKX_SECRET_KEY, and OKX_PASSPHRASE repository secrets, then the workflow will log in with onchainos wallet login before scanning.`;
+  }
+
+  return detail;
+}
+
 function onchainos(args) {
   try {
     const output = execFileSync("onchainos", args, {
@@ -37,7 +45,7 @@ function onchainos(args) {
   } catch (error) {
     const stdout = error.stdout ? String(error.stdout) : "";
     const stderr = error.stderr ? String(error.stderr) : "";
-    const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+    const detail = explainOnchainosError([stderr.trim(), stdout.trim()].filter(Boolean).join("\n"));
     throw new Error(`${command(args)} failed${detail ? `: ${detail}` : ""}`);
   }
 }
