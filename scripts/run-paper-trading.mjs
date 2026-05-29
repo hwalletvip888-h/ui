@@ -26,13 +26,20 @@ function command(args) {
 }
 
 function onchainos(args) {
-  const output = execFileSync("onchainos", args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 120000,
-  });
-  const start = output.indexOf("{");
-  return JSON.parse(start >= 0 ? output.slice(start) : output);
+  try {
+    const output = execFileSync("onchainos", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120000,
+    });
+    const start = output.indexOf("{");
+    return JSON.parse(start >= 0 ? output.slice(start) : output);
+  } catch (error) {
+    const stdout = error.stdout ? String(error.stdout) : "";
+    const stderr = error.stderr ? String(error.stderr) : "";
+    const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+    throw new Error(`${command(args)} failed${detail ? `: ${detail}` : ""}`);
+  }
 }
 
 function loadState() {
