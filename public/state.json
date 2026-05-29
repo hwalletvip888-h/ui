@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-29T02:43:15.117Z",
+  "updatedAt": "2026-05-29T02:46:34.607Z",
   "mode": "paper",
   "initialCapital": 1000,
   "cash": 1000,
@@ -30,6 +30,30 @@
   "positions": [],
   "trades": [],
   "scans": [
+    {
+      "time": "2026-05-29T02:46:34.352Z",
+      "status": "error",
+      "params": {
+        "chains": [
+          "solana",
+          "ethereum",
+          "bsc",
+          "base"
+        ],
+        "walletType": "1,3",
+        "minAmountUsd": 5000,
+        "minAddressCount": 2,
+        "minLiquidityUsd": 100000,
+        "limit": 20
+      },
+      "actions": [],
+      "errors": [
+        {
+          "stage": "run",
+          "message": "onchainos signal chains failed: {\n  \"ok\": false,\n  \"error\": \"API error (code=50114): Invalid Authority. You are not logged in, run `wallet login` to sign into OKX Agentic Wallet.\"\n}"
+        }
+      ]
+    },
     {
       "time": "2026-05-29T02:43:14.696Z",
       "status": "error",
