@@ -130,6 +130,11 @@
         word-break: break-all;
       }
 
+      .scan-note {
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
       .good {
         color: var(--good);
       }
@@ -254,6 +259,27 @@
         NO_BUY: "未买入",
       };
 
+      const reasonLabel = {
+        "no-candidate": "没有符合条件的候选代币",
+        "max-buy-rounds-reached": "已达到最大买入轮数",
+        "stop-loss": "触发止损",
+        "take-profit": "触发止盈",
+        "unsupported-chain": "链暂不支持",
+      };
+
+      const chainLabel = {
+        solana: "Solana",
+        ethereum: "Ethereum",
+        bsc: "BSC",
+        base: "Base",
+        xlayer: "X Layer",
+      };
+
+      const walletTypeLabel = {
+        1: "聪明钱",
+        3: "KOL / 大户",
+      };
+
       function formatTime(value) {
         if (!value) return "";
         const date = new Date(value);
@@ -266,6 +292,53 @@
 
       function tr(cells) {
         return `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+      }
+
+      function formatWalletTypes(value) {
+        return String(value || "")
+          .split(",")
+          .map((item) => walletTypeLabel[item.trim()] || item.trim())
+          .filter(Boolean)
+          .join("、");
+      }
+
+      function formatScanParams(params) {
+        if (!params) return "";
+        const chains = (params.chains || []).map((chain) => chainLabel[chain] || chain).join("、");
+        return [
+          chains ? `扫描链：${chains}` : "",
+          params.walletType ? `地址类型：${formatWalletTypes(params.walletType)}` : "",
+          params.minAmountUsd ? `最低买入金额：${money.format(params.minAmountUsd)}` : "",
+          params.minAddressCount ? `最低触发地址数：${params.minAddressCount}` : "",
+          params.minLiquidityUsd ? `最低流动性：${money.format(params.minLiquidityUsd)}` : "",
+          params.limit ? `每条链最多读取：${params.limit} 条信号` : "",
+        ]
+          .filter(Boolean)
+          .join("<br>");
+      }
+
+      function formatScanNote(scan, defaultParams) {
+        const lines = [];
+        if (scan.note) lines.push(`备注：${scan.note}`);
+        const params = formatScanParams(scan.params || defaultParams);
+        if (params) lines.push(params);
+        if (scan.signalScans?.length) {
+          const counts = scan.signalScans
+            .map((item) => `${chainLabel[item.chain] || item.chain} ${item.skipped ? reasonLabel[item.reason] || item.reason : `${item.count || 0} 条`}`)
+            .join("；");
+          lines.push(`本轮信号：${counts}`);
+        }
+        if (scan.errors?.length) {
+          lines.push(`错误：${scan.errors.map((error) => error.message).join("；")}`);
+        }
+        return `<div class="scan-note">${lines.join("<br>")}</div>`;
+      }
+
+      function formatAction(action) {
+        const label = actionLabel[action.type] || action.type;
+        const symbol = action.symbol ? ` ${action.symbol}` : "";
+        const reason = action.reason ? `：${reasonLabel[action.reason] || action.reason}` : "";
+        return `${label}${symbol}${reason}`;
       }
 
       async function loadState() {
@@ -326,8 +399,8 @@
             tr([
               formatTime(scan.time),
               statusLabel[scan.status] || scan.status,
-              (scan.actions || []).map((action) => `${actionLabel[action.type] || action.type}${action.symbol ? ` ${action.symbol}` : ""}${action.reason ? `：${action.reason}` : ""}`).join("<br>"),
-              `<code>${scan.note || JSON.stringify(scan.params || state.scanParams || {})}</code>`,
+              (scan.actions || []).map(formatAction).join("<br>"),
+              formatScanNote(scan, state.scanParams),
             ]),
           )
           .join("");
