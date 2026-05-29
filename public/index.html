@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Agent Wallet Paper Trading</title>
+    <title>Agent Wallet 模拟盘</title>
     <style>
       :root {
         --bg: #f5f7fa;
@@ -162,26 +162,26 @@
     <main>
       <header>
         <div>
-          <h1>Agent Wallet Paper Trading</h1>
-          <div class="muted" id="updated">Loading...</div>
+          <h1>Agent Wallet 模拟盘</h1>
+          <div class="muted" id="updated">加载中...</div>
         </div>
-        <span class="pill" id="rounds">0 / 10 rounds</span>
+        <span class="pill" id="rounds">第 0 / 10 轮</span>
       </header>
 
       <section class="grid" id="metrics"></section>
 
       <section class="panel">
-        <h2>Open Positions</h2>
+        <h2>当前持仓</h2>
         <table>
           <thead>
             <tr>
-              <th>Token</th>
-              <th>Chain</th>
-              <th>Quantity</th>
-              <th>Entry</th>
-              <th>Mark</th>
-              <th>Value</th>
-              <th>PnL</th>
+              <th>代币</th>
+              <th>链</th>
+              <th>数量</th>
+              <th>买入价</th>
+              <th>标记价</th>
+              <th>市值</th>
+              <th>浮动盈亏</th>
             </tr>
           </thead>
           <tbody id="positions"></tbody>
@@ -189,18 +189,18 @@
       </section>
 
       <section class="panel">
-        <h2>Trades</h2>
+        <h2>交易记录</h2>
         <table>
           <thead>
             <tr>
               <th>ID</th>
-              <th>Time</th>
-              <th>Side</th>
-              <th>Token</th>
-              <th>Price</th>
-              <th>Notional</th>
-              <th>Realized PnL</th>
-              <th>Source</th>
+              <th>时间</th>
+              <th>方向</th>
+              <th>代币</th>
+              <th>价格</th>
+              <th>金额</th>
+              <th>已实现盈亏</th>
+              <th>价格来源</th>
             </tr>
           </thead>
           <tbody id="trades"></tbody>
@@ -208,14 +208,14 @@
       </section>
 
       <section class="panel">
-        <h2>Latest Scans</h2>
+        <h2>最近扫描</h2>
         <table>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Status</th>
-              <th>Actions</th>
-              <th>Parameters / Notes</th>
+              <th>时间</th>
+              <th>状态</th>
+              <th>动作</th>
+              <th>参数 / 备注</th>
             </tr>
           </thead>
           <tbody id="scans"></tbody>
@@ -224,8 +224,41 @@
     </main>
 
     <script>
-      const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
-      const qty = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
+      const money = new Intl.NumberFormat("zh-CN", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+      const qty = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 });
+      const dateTime = new Intl.DateTimeFormat("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+
+      const sideLabel = {
+        BUY: "买入",
+        SELL: "卖出",
+      };
+
+      const statusLabel = {
+        ok: "正常",
+        error: "错误",
+        started: "进行中",
+        initialized: "已初始化",
+      };
+
+      const actionLabel = {
+        BUY: "买入",
+        SELL: "卖出",
+        NO_BUY: "未买入",
+      };
+
+      function formatTime(value) {
+        if (!value) return "";
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? value : dateTime.format(date);
+      }
 
       function tone(value) {
         return Number(value) >= 0 ? "good" : "bad";
@@ -242,13 +275,13 @@
         const unrealized = state.positions.reduce((sum, item) => sum + Number(item.unrealizedPnl || 0), 0);
         const equity = Number(state.cash || 0) + openValue;
 
-        document.getElementById("updated").textContent = `Updated ${state.updatedAt}`;
-        document.getElementById("rounds").textContent = `${state.buyRounds} / ${state.maxBuyRounds} rounds`;
+        document.getElementById("updated").textContent = `最后更新：${formatTime(state.updatedAt)}`;
+        document.getElementById("rounds").textContent = `第 ${state.buyRounds} / ${state.maxBuyRounds} 轮`;
         document.getElementById("metrics").innerHTML = [
-          ["Equity", money.format(equity)],
-          ["Cash", money.format(state.cash || 0)],
-          ["Realized PnL", money.format(state.realizedPnl || 0)],
-          ["Unrealized PnL", `<span class="${tone(unrealized)}">${money.format(unrealized)}</span>`],
+          ["总权益", money.format(equity)],
+          ["现金", money.format(state.cash || 0)],
+          ["已实现盈亏", money.format(state.realizedPnl || 0)],
+          ["浮动盈亏", `<span class="${tone(unrealized)}">${money.format(unrealized)}</span>`],
         ]
           .map(([label, value]) => `<article class="metric"><span>${label}</span><strong>${value}</strong></article>`)
           .join("");
@@ -267,7 +300,7 @@
                 ]),
               )
               .join("")
-          : tr(["No open positions", "", "", "", "", "", ""]);
+          : tr(["暂无持仓", "", "", "", "", "", ""]);
 
         document.getElementById("trades").innerHTML = state.trades.length
           ? [...state.trades]
@@ -275,8 +308,8 @@
               .map((trade) =>
                 tr([
                   trade.id,
-                  trade.time,
-                  trade.side,
+                  formatTime(trade.time),
+                  sideLabel[trade.side] || trade.side,
                   `<strong>${trade.symbol}</strong><br><code>${trade.contract}</code>`,
                   Number(trade.price || 0).toPrecision(8),
                   money.format(trade.notional || 0),
@@ -285,15 +318,15 @@
                 ]),
               )
               .join("")
-          : tr(["No trades yet", "", "", "", "", "", "", ""]);
+          : tr(["暂无交易", "", "", "", "", "", "", ""]);
 
         document.getElementById("scans").innerHTML = (state.scans || [])
           .slice(0, 20)
           .map((scan) =>
             tr([
-              scan.time,
-              scan.status,
-              (scan.actions || []).map((action) => `${action.type}${action.symbol ? ` ${action.symbol}` : ""}`).join("<br>"),
+              formatTime(scan.time),
+              statusLabel[scan.status] || scan.status,
+              (scan.actions || []).map((action) => `${actionLabel[action.type] || action.type}${action.symbol ? ` ${action.symbol}` : ""}${action.reason ? `：${action.reason}` : ""}`).join("<br>"),
               `<code>${scan.note || JSON.stringify(scan.params || state.scanParams || {})}</code>`,
             ]),
           )
