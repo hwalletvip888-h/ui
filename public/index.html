@@ -135,6 +135,12 @@
         line-height: 1.6;
       }
 
+      .strategy-note {
+        color: var(--muted);
+        line-height: 1.5;
+        min-width: 180px;
+      }
+
       .good {
         color: var(--good);
       }
@@ -187,9 +193,26 @@
               <th>标记价</th>
               <th>市值</th>
               <th>浮动盈亏</th>
+              <th>策略</th>
             </tr>
           </thead>
           <tbody id="positions"></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>H-Signal 决策</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>代币</th>
+              <th>决策</th>
+              <th>风险</th>
+              <th>买入理由</th>
+            </tr>
+          </thead>
+          <tbody id="strategy-decisions"></tbody>
         </table>
       </section>
 
@@ -205,6 +228,7 @@
               <th>价格</th>
               <th>金额</th>
               <th>已实现盈亏</th>
+              <th>策略</th>
               <th>价格来源</th>
             </tr>
           </thead>
@@ -280,6 +304,12 @@
         3: "KOL / 大户",
       };
 
+      const decisionLabel = {
+        BUY: "买入",
+        WATCH: "观察",
+        SKIP: "跳过",
+      };
+
       function formatTime(value) {
         if (!value) return "";
         const date = new Date(value);
@@ -292,6 +322,31 @@
 
       function tr(cells) {
         return `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+      }
+
+      function strategyPayload(strategy) {
+        return strategy?.data || null;
+      }
+
+      function strategyEvaluation(strategy) {
+        return strategyPayload(strategy)?.evaluation || null;
+      }
+
+      function strategyRisk(strategy) {
+        return strategyPayload(strategy)?.tokenRisk || null;
+      }
+
+      function formatStrategy(strategy) {
+        const evaluation = strategyEvaluation(strategy);
+        if (!evaluation) return `<span class="muted">未记录</span>`;
+        const payload = strategyPayload(strategy);
+        const risk = strategyRisk(strategy);
+        return `<div class="strategy-note">决策：${decisionLabel[evaluation.decision] || evaluation.decision || "未知"} ${Number(evaluation.score || 0).toFixed(2)}<br>建议仓位：${(Number(evaluation.suggestedPositionPct || 0) * 100).toFixed(2)}%<br>风险：${risk ? `${risk.level} ${Number(risk.score || 0).toFixed(2)}` : "未记录"}<br>数据源：${payload?.dataSource || strategy.provider || "未知"}</div>`;
+      }
+
+      function formatStrategyReasons(strategy) {
+        const reasons = strategyEvaluation(strategy)?.reasons || [];
+        return reasons.length ? reasons.slice(0, 4).join("<br>") : "未记录买入理由";
       }
 
       function formatWalletTypes(value) {
@@ -334,7 +389,7 @@
         if (scan.strategyEvaluations?.length) {
           const top = scan.strategyEvaluations
             .slice(0, 5)
-            .map((item) => `${item.symbol || "未知"} ${item.decision || "SKIP"} ${Number(item.score || 0).toFixed(2)}${item.error ? "（失败）" : ""}`)
+            .map((item) => `${item.symbol || "未知"} ${decisionLabel[item.decision] || item.decision || "跳过"} ${Number(item.score || 0).toFixed(2)}${item.error ? "（失败）" : ""}`)
             .join("；");
           lines.push(`候选评分：${top}`);
         }
@@ -380,10 +435,28 @@
                   Number(position.lastMark || 0).toPrecision(8),
                   money.format(position.marketValue || 0),
                   `<span class="${tone(position.unrealizedPnl)}">${money.format(position.unrealizedPnl || 0)} (${Number(position.unrealizedPnlPct || 0).toFixed(2)}%)</span>`,
+                  formatStrategy(position.entryStrategy),
                 ]),
               )
               .join("")
-          : tr(["暂无持仓", "", "", "", "", "", ""]);
+          : tr(["暂无持仓", "", "", "", "", "", "", ""]);
+
+        const strategyTrades = [...state.trades].reverse().filter((trade) => trade.strategy?.data?.evaluation);
+        document.getElementById("strategy-decisions").innerHTML = strategyTrades.length
+          ? strategyTrades
+              .map((trade) => {
+                const evaluation = strategyEvaluation(trade.strategy);
+                const risk = strategyRisk(trade.strategy);
+                return tr([
+                  formatTime(trade.time),
+                  `<strong>${trade.symbol}</strong><br><code>${trade.contract}</code>`,
+                  `${decisionLabel[evaluation?.decision] || evaluation?.decision || "未知"}<br>${Number(evaluation?.score || 0).toFixed(2)}`,
+                  risk ? `${risk.level}<br>${Number(risk.score || 0).toFixed(2)}` : "未记录",
+                  `<div class="strategy-note">${formatStrategyReasons(trade.strategy)}</div>`,
+                ]);
+              })
+              .join("")
+          : tr(["暂无 H-Signal 决策", "", "", "", ""]);
 
         document.getElementById("trades").innerHTML = state.trades.length
           ? [...state.trades]
@@ -397,11 +470,12 @@
                   Number(trade.price || 0).toPrecision(8),
                   money.format(trade.notional || 0),
                   `<span class="${tone(trade.realizedPnl)}">${money.format(trade.realizedPnl || 0)}</span>`,
+                  formatStrategy(trade.strategy),
                   `<code>${trade.source || ""}</code>`,
                 ]),
               )
               .join("")
-          : tr(["暂无交易", "", "", "", "", "", "", ""]);
+          : tr(["暂无交易", "", "", "", "", "", "", "", ""]);
 
         document.getElementById("scans").innerHTML = (state.scans || [])
           .slice(0, 20)
