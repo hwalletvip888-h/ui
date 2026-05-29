@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-28T08:40:00.000Z",
+  "updatedAt": "2026-05-29T02:43:15.117Z",
   "mode": "paper",
   "initialCapital": 1000,
   "cash": 1000,
@@ -8,7 +8,12 @@
   "buyRounds": 0,
   "maxBuyRounds": 10,
   "scanParams": {
-    "chains": ["solana", "ethereum", "bsc", "base"],
+    "chains": [
+      "solana",
+      "ethereum",
+      "bsc",
+      "base"
+    ],
     "walletType": "1,3",
     "minAmountUsd": 5000,
     "minAddressCount": 2,
@@ -25,6 +30,30 @@
   "positions": [],
   "trades": [],
   "scans": [
+    {
+      "time": "2026-05-29T02:43:14.696Z",
+      "status": "error",
+      "params": {
+        "chains": [
+          "solana",
+          "ethereum",
+          "bsc",
+          "base"
+        ],
+        "walletType": "1,3",
+        "minAmountUsd": 5000,
+        "minAddressCount": 2,
+        "minLiquidityUsd": 100000,
+        "limit": 20
+      },
+      "actions": [],
+      "errors": [
+        {
+          "stage": "run",
+          "message": "Command failed: onchainos signal chains"
+        }
+      ]
+    },
     {
       "time": "2026-05-28T08:40:00.000Z",
       "status": "initialized",
