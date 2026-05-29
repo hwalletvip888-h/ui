@@ -13,6 +13,7 @@ const chainByIndex = new Map([
   ["501", "solana"],
   ["8453", "base"],
 ]);
+const chainIndexByName = new Map(Array.from(chainByIndex, ([index, name]) => [name, index]));
 
 function timestamp() {
   return new Date().toISOString();
@@ -33,6 +34,15 @@ function hSignalEnabled() {
 
 function hSignalUrl(path) {
   return `${hSignalBaseUrl.replace(/\/+$/, "")}${path}`;
+}
+
+function hSignalPath(path, params) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") search.set(key, String(value));
+  }
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 function explainOnchainosError(detail) {
@@ -150,13 +160,13 @@ function sell(state, position, reason) {
   });
 }
 
-function scanSignals(state) {
+function scanSignalsViaOnchainos(state, onlyChain = null) {
   const params = state.scanParams;
   const supported = onchainos(["signal", "chains"]);
   const supportedChains = new Set((supported.data || []).map((item) => chainByIndex.get(item.chainIndex)).filter(Boolean));
   const scans = [];
 
-  for (const chain of params.chains) {
+  for (const chain of onlyChain ? [onlyChain] : params.chains) {
     if (!supportedChains.has(chain)) {
       scans.push({ chain, skipped: true, reason: "unsupported-chain" });
       continue;
@@ -183,10 +193,77 @@ function scanSignals(state) {
       chain,
       params,
       source: command(args),
+      dataSource: "onchainos-cli",
       ok: response.ok,
       count: Array.isArray(response.data) ? response.data.length : 0,
       signals: Array.isArray(response.data) ? response.data : [],
     });
+  }
+
+  return scans;
+}
+
+async function scanChainViaHSignal(chain, params) {
+  const path = hSignalPath("/api/v1/onchain/signals/latest", {
+    chain,
+    walletType: params.walletType,
+    minAmountUsd: params.minAmountUsd,
+    minAddressCount: params.minAddressCount,
+    minLiquidityUsd: params.minLiquidityUsd,
+    limit: params.limit,
+  });
+  const response = await fetch(hSignalUrl(path), {
+    headers: {
+      "X-H-SIGNAL-KEY": hSignalApiKey,
+    },
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload || payload.code !== "0") {
+    throw new Error(`H-Signal signals failed (${response.status}): ${payload?.message || "invalid response"}`);
+  }
+
+  const signals = Array.isArray(payload.data?.items) ? payload.data.items : [];
+  return {
+    chain,
+    chainIndex: chainIndexByName.get(chain) || payload.data?.requestParams?.chainIndex || null,
+    params: payload.data?.requestParams || params,
+    source: `H-Signal ${path}`,
+    dataSource: payload.data?.dataSource || "h-signal-api",
+    provider: payload.meta?.provider || "okx-signal-list",
+    ok: true,
+    count: signals.length,
+    signals,
+  };
+}
+
+async function scanSignals(state) {
+  const params = state.scanParams;
+  if (!hSignalEnabled()) return scanSignalsViaOnchainos(state);
+
+  const scans = [];
+  for (const chain of params.chains) {
+    try {
+      scans.push(await scanChainViaHSignal(chain, params));
+    } catch (error) {
+      try {
+        const fallbackScans = scanSignalsViaOnchainos(state, chain);
+        scans.push({
+          ...(fallbackScans[0] || { chain, ok: false, count: 0, signals: [] }),
+          hSignalError: error.message,
+          fallback: "onchainos-cli",
+        });
+      } catch (fallbackError) {
+        scans.push({
+          chain,
+          ok: false,
+          count: 0,
+          signals: [],
+          dataSource: "h-signal-api",
+          hSignalError: error.message,
+          fallbackError: fallbackError.message,
+        });
+      }
+    }
   }
 
   return scans;
@@ -396,8 +473,9 @@ async function run() {
     state.positions = open;
 
     if (state.buyRounds < state.maxBuyRounds) {
-      const signalScans = scanSignals(state);
+      const signalScans = await scanSignals(state);
       scan.signalScans = signalScans;
+      scan.signalProvider = hSignalEnabled() ? "h-signal-api" : "onchainos-cli";
       const strategyResult = await pickSignalWithStrategy(signalScans, state);
       scan.strategyProvider = hSignalEnabled() ? "h-signal-api" : "local-fallback";
       scan.strategyEvaluations = strategyResult.evaluations.map((item) => ({

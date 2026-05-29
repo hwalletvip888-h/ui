@@ -382,6 +382,10 @@
             .map((item) => `${chainLabel[item.chain] || item.chain} ${item.skipped ? reasonLabel[item.reason] || item.reason : `${item.count || 0} 条`}`)
             .join("；");
           lines.push(`本轮信号：${counts}`);
+          const signalSources = [...new Set(scan.signalScans.map((item) => item.dataSource || item.provider).filter(Boolean))];
+          if (signalSources.length) lines.push(`信号来源：${signalSources.map((item) => (item === "okx-native-api" ? "OKX 原生 API" : item)).join("、")}`);
+          const fallbackErrors = scan.signalScans.filter((item) => item.hSignalError);
+          if (fallbackErrors.length) lines.push(`信号兜底：${fallbackErrors.map((item) => `${chainLabel[item.chain] || item.chain} ${item.fallbackError || item.hSignalError}`).join("；")}`);
         }
         if (scan.strategyProvider) {
           lines.push(`策略来源：${scan.strategyProvider === "h-signal-api" ? "H-Signal" : "本地兜底评分"}`);
