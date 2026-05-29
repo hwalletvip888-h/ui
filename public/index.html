@@ -328,6 +328,16 @@
             .join("；");
           lines.push(`本轮信号：${counts}`);
         }
+        if (scan.strategyProvider) {
+          lines.push(`策略来源：${scan.strategyProvider === "h-signal-api" ? "H-Signal" : "本地兜底评分"}`);
+        }
+        if (scan.strategyEvaluations?.length) {
+          const top = scan.strategyEvaluations
+            .slice(0, 5)
+            .map((item) => `${item.symbol || "未知"} ${item.decision || "SKIP"} ${Number(item.score || 0).toFixed(2)}${item.error ? "（失败）" : ""}`)
+            .join("；");
+          lines.push(`候选评分：${top}`);
+        }
         if (scan.errors?.length) {
           lines.push(`错误：${scan.errors.map((error) => error.message).join("；")}`);
         }

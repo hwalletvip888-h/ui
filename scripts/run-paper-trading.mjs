@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 const statePath = resolve("public/state.json");
+const hSignalBaseUrl = process.env.H_SIGNAL_API_BASE_URL || "";
+const hSignalApiKey = process.env.H_SIGNAL_API_KEY || "";
 
 const chainByIndex = new Map([
   ["1", "ethereum"],
@@ -23,6 +25,14 @@ function number(value, fallback = 0) {
 
 function command(args) {
   return `onchainos ${args.join(" ")}`;
+}
+
+function hSignalEnabled() {
+  return Boolean(hSignalBaseUrl && hSignalApiKey);
+}
+
+function hSignalUrl(path) {
+  return `${hSignalBaseUrl.replace(/\/+$/, "")}${path}`;
 }
 
 function explainOnchainosError(detail) {
@@ -195,7 +205,103 @@ function pickSignal(scans, state) {
     .sort((a, b) => b.score - a.score)[0]?.signal;
 }
 
-function buy(state, signal) {
+async function evaluateSignal(signal) {
+  if (!hSignalEnabled()) {
+    return {
+      provider: "local-fallback",
+      mode: "legacy-score",
+      data: {
+        evaluation: {
+          strategyVersion: "legacy-local-score",
+          decision: "BUY",
+          score: number(signal.amountUsd) / 1000 + number(signal.triggerWalletCount) * 10 - number(signal.soldRatioPercent),
+          suggestedPositionPct: 0.25,
+          reasons: ["H-Signal is not configured; using the legacy local signal score."],
+        },
+      },
+    };
+  }
+
+  const response = await fetch(hSignalUrl("/api/v1/onchain/strategies/evaluate"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-H-SIGNAL-KEY": hSignalApiKey,
+    },
+    body: JSON.stringify({
+      chainIndex: signal.chainIndex,
+      tokenContractAddress: signal.token.tokenAddress,
+      signal: {
+        amountUsd: signal.amountUsd,
+        triggerWalletCount: signal.triggerWalletCount,
+        soldRatioPercent: signal.soldRatioPercent,
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload || payload.code !== "0") {
+    throw new Error(`H-Signal evaluate failed (${response.status}): ${payload?.message || "invalid response"}`);
+  }
+
+  return {
+    provider: "h-signal-api",
+    mode: payload.data?.mode || "unknown",
+    data: payload.data,
+    meta: payload.meta,
+  };
+}
+
+async function pickSignalWithStrategy(scans, state) {
+  const held = new Set(state.positions.map((position) => position.contract.toLowerCase()));
+  const candidates = scans
+    .flatMap((scan) => scan.signals || [])
+    .filter((signal) => signal.token?.tokenAddress)
+    .filter((signal) => !held.has(signal.token.tokenAddress.toLowerCase()))
+    .map((signal) => ({
+      signal,
+      legacyScore: number(signal.amountUsd) / 1000 + number(signal.triggerWalletCount) * 10 - number(signal.soldRatioPercent),
+    }))
+    .sort((a, b) => b.legacyScore - a.legacyScore)
+    .slice(0, 10);
+
+  const evaluations = [];
+  for (const candidate of candidates) {
+    try {
+      const strategy = await evaluateSignal(candidate.signal);
+      const evaluation = strategy.data?.evaluation || {};
+      evaluations.push({
+        signal: candidate.signal,
+        legacyScore: candidate.legacyScore,
+        strategy,
+        decision: evaluation.decision || "SKIP",
+        score: number(evaluation.score, candidate.legacyScore),
+      });
+    } catch (error) {
+      evaluations.push({
+        signal: candidate.signal,
+        legacyScore: candidate.legacyScore,
+        error: error.message,
+        decision: "SKIP",
+        score: 0,
+      });
+    }
+  }
+
+  const selected =
+    evaluations
+      .filter((item) => item.decision === "BUY")
+      .sort((a, b) => b.score - a.score)[0] ||
+    evaluations
+      .filter((item) => item.decision === "WATCH")
+      .sort((a, b) => b.score - a.score)[0] ||
+    null;
+
+  return { selected, evaluations };
+}
+
+function buy(state, selected) {
+  const signal = selected?.signal || selected;
   if (!signal || state.buyRounds >= state.maxBuyRounds) return null;
 
   const chain = chainByIndex.get(signal.chainIndex) || "solana";
@@ -206,7 +312,9 @@ function buy(state, signal) {
   if (!response.ok || !data) throw new Error(`No price-info for candidate ${signal.token.symbol}`);
 
   const price = number(data.price);
-  const notional = Math.min(state.cash, equity(state) * state.riskRules.maxPositionPct);
+  const suggestedPositionPct = number(selected?.strategy?.data?.evaluation?.suggestedPositionPct, state.riskRules.maxPositionPct);
+  const positionPct = Math.min(state.riskRules.maxPositionPct, Math.max(0, suggestedPositionPct));
+  const notional = Math.min(state.cash, equity(state) * positionPct);
   if (notional <= 0) return null;
 
   const quantity = notional / price;
@@ -226,6 +334,7 @@ function buy(state, signal) {
     unrealizedPnl: 0,
     unrealizedPnlPct: 0,
     entrySignal: signal,
+    entryStrategy: selected?.strategy || null,
     entrySource: command(args),
     lastMarkSource: command(args),
     lastMarkSnapshot: data,
@@ -249,12 +358,13 @@ function buy(state, signal) {
     realizedPnl: 0,
     source: command(args),
     signal,
+    strategy: selected?.strategy || null,
   });
 
   return position;
 }
 
-function run() {
+async function run() {
   const state = loadState();
   const scan = {
     time: timestamp(),
@@ -288,7 +398,19 @@ function run() {
     if (state.buyRounds < state.maxBuyRounds) {
       const signalScans = scanSignals(state);
       scan.signalScans = signalScans;
-      const bought = buy(state, pickSignal(signalScans, state));
+      const strategyResult = await pickSignalWithStrategy(signalScans, state);
+      scan.strategyProvider = hSignalEnabled() ? "h-signal-api" : "local-fallback";
+      scan.strategyEvaluations = strategyResult.evaluations.map((item) => ({
+        symbol: item.signal.token?.symbol,
+        chainIndex: item.signal.chainIndex,
+        contract: item.signal.token?.tokenAddress,
+        legacyScore: item.legacyScore,
+        decision: item.decision,
+        score: item.score,
+        error: item.error || null,
+        strategy: item.strategy || null,
+      }));
+      const bought = buy(state, strategyResult.selected);
       scan.actions.push(bought ? { type: "BUY", symbol: bought.symbol, round: bought.round } : { type: "NO_BUY", reason: "no-candidate" });
     } else {
       scan.actions.push({ type: "NO_BUY", reason: "max-buy-rounds-reached" });

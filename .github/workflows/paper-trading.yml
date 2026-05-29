@@ -47,6 +47,8 @@ jobs:
           OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
           OKX_SECRET_KEY: ${{ secrets.OKX_SECRET_KEY }}
           OKX_PASSPHRASE: ${{ secrets.OKX_PASSPHRASE }}
+          H_SIGNAL_API_BASE_URL: ${{ secrets.H_SIGNAL_API_BASE_URL }}
+          H_SIGNAL_API_KEY: ${{ secrets.H_SIGNAL_API_KEY }}
         run: node scripts/run-paper-trading.mjs
 
       - name: Commit updated state
